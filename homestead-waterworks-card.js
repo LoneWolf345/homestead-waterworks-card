@@ -3,7 +3,7 @@
  * a hatched 14-day bar chart from recorder statistics, a five-cell ledger, irrigation rows
  * and the leak pucks filing as "From our correspondents". Read-only: tap → more-info.
  * Companion to almanac-weather-card / network-ledger-card / homestead-classifieds-card. */
-const HWC_VERSION = "2026.9.1";
+const HWC_VERSION = "2026.9.2";
 const INK = "#3a2d1f", PAPER = "#f3e7d3", TAN = "#a3876a", BROWN = "#7a6248",
   TERRA = "#c65f38", BLUE = "#5f7e94", DOT = "#cfb894", GREEN = "#2f7f6f";
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -147,13 +147,14 @@ class HomesteadWaterworksCard extends HTMLElement {
     // headline / dek / lede
     const head = this._headline(s);
     const dek = `Flow at press time ${flow == null ? "—" : fmt(flow, 1)} gal/min · ${c.days}-day average ${s.avg == null ? "—" : fmt(Math.round(s.avg))} gal/day · month to date ${month == null ? "—" : fmt(Math.round(month))} gal`;
-    const names = corr.map((p) => p.name.toLowerCase());
+    const lc = (n) => "the " + String(n).replace(/^([A-Z])(?=[a-z])/, (m) => m.toLowerCase()); // keeps acronyms like "RO filter"
+    const names = corr.map((p) => lc(p.name));
     const nameList = names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1] : names[0] || "";
     const bucketTxt = bucket == null ? "" : bucket < 0 ? `, owed ${fmt(Math.abs(bucket), 2)} in,` : `, ${fmt(bucket, 2)} in to the good,`;
     let lede = `The main reported ${band ? (band.mood === "ordinary" ? "an ordinary" : "a " + band.mood) : "a"} ${DAYS[now.getDay()]}: ${s.todayGal == null ? "no reading" : fmt(Math.round(s.todayGal)) + " gallons"} by press time${band ? ", " + band.lede : ""}. `;
     if (ir.duration_entity || ir.automation_entity) lede += `The ${ir.name.toLowerCase()}${bucketTxt} ${skip ? "stands down for rain" : water.lede}; `;
     else lede += "";
-    lede += wet.length ? `our correspondent at the ${wet[0].name.toLowerCase()} reports water${wet.length > 1 ? ", and so does the " + wet[1].name.toLowerCase() : ""}.`
+    lede += wet.length ? `our correspondent at ${lc(wet[0].name)} reports water${wet.length > 1 ? ", and so does " + lc(wet[1].name) : ""}.`
       : corr.length ? `our correspondents at ${nameList} all file the same dispatch: dry, nothing to report.` : "";
 
     // plate
@@ -203,7 +204,7 @@ class HomesteadWaterworksCard extends HTMLElement {
     // correspondents
     let corrHtml = "";
     if (corr.length) {
-      const right = overnight == null ? "" : `OVERNIGHT, 2–5 A.M. · ${fmt(overnight, 1)} GAL MOVED`;
+      const right = overnight == null ? "" : `OVERNIGHT · ${fmt(overnight, 1)} GAL MOVED`;
       corrHtml = `<div class="sub"><span class="subn">From our correspondents</span><span class="subr${overnight > 0 ? " hot" : ""}">${esc(right)}</span></div>
       <div class="sent">${corr.map((p) => `<div class="puck${p.wet ? " wet" : ""}" data-entity="${esc(p.entity)}"><div class="pn">${esc(p.name).toUpperCase()}</div><div class="ps">${p.wet ? "WATER — reports our correspondent" : p.known ? "Dry, nothing to report" : "No dispatch received"}</div></div>`).join("")}</div>`;
     }
@@ -275,7 +276,7 @@ class HomesteadWaterworksCard extends HTMLElement {
   .plate i { font-style: italic; } .plate .r { white-space: nowrap; }
   .lede { font-family: Fraunces, Georgia, serif; font-size: max(10px, calc(12.5*var(--px))); line-height: 1.45; margin: calc(10*var(--px)) 0 0; }
   .lede::first-letter { font-size: 2.7em; font-weight: 900; float: left; line-height: .82; padding: 4px 6px 0 0; }
-  .sub { display: flex; justify-content: space-between; align-items: baseline; margin-top: calc(14*var(--px)); padding-bottom: 3px; border-bottom: 1px solid ${INK}; }
+  .sub { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; column-gap: calc(12*var(--px)); row-gap: 2px; margin-top: calc(14*var(--px)); padding-bottom: 3px; border-bottom: 1px solid ${INK}; }
   .subn { font-family: Fraunces, Georgia, serif; font-size: max(10px, calc(12.5*var(--px))); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
   .subr { font-size: max(7px, calc(9*var(--px))); font-weight: 700; letter-spacing: 1.5px; color: ${TAN}; } .subr.hot { color: ${TERRA}; }
   .chart { display: block; width: 100%; margin-top: calc(8*var(--px)); cursor: pointer; }

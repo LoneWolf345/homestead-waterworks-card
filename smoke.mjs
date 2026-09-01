@@ -42,7 +42,7 @@ check("setConfig rejects missing meter_entity", (() => { try { new Card().setCon
   check("irrigation: next watering tonight-ish phrasing", /Next watering<\/span><span class="v">(Today|Tonight|Tomorrow|Sun|Mon|Tue|Wed|Thu|Fri|Sat), ~\d+ (AM|PM) · 4 h 00 m/.test(h));
   check("irrigation: bucket deficit terracotta", h.includes("−1.17 in · deficit") && /class="v due">−1\.17/.test(h));
   check("irrigation: rain no skip + gauge", h.includes("0.01 in · no skip") && h.includes("0.47 in"));
-  check("correspondents: three dry dispatches + overnight", (h.match(/Dry, nothing to report/g) || []).length === 3 && h.includes("OVERNIGHT, 2–5 A.M. · 0.0 GAL MOVED"));
+  check("correspondents: three dry dispatches + overnight", (h.match(/Dry, nothing to report/g) || []).length === 3 && h.includes("OVERNIGHT · 0.0 GAL MOVED"));
   check("lede: drop-cap sentence mentions habit + dispatch", h.includes('class="lede"') && h.includes("half its fourteen-day habit") && h.includes("file the same dispatch: dry, nothing to report."));
   check("no STOP PRESS when dry", !h.includes("STOP PRESS"));
   check("height remembered after load", store.get("hwc-h:sensor.water_meter_reading") === "700"); }
@@ -50,8 +50,8 @@ check("setConfig rejects missing meter_entity", (() => { try { new Card().setCon
 { const st = base(); st["binary_sensor.kitchen_kitchen_sink_leak_flood"] = S("on"); st["input_number.water_overnight_leak_gal"] = S(3.2);
   const el = await make(st); const h = el.shadowRoot.innerHTML;
   check("wet puck: dispatch + STOP PRESS band", h.includes("WATER — reports our correspondent") && h.includes("STOP PRESS · WATER AT THE KITCHEN SINK"));
-  check("overnight > 0 is hot", h.includes('class="subr hot">OVERNIGHT, 2–5 A.M. · 3.2 GAL MOVED'));
-  check("lede wet variant", h.includes("our correspondent at the kitchen sink reports water.")); }
+  check("overnight > 0 is hot", h.includes('class="subr hot">OVERNIGHT · 3.2 GAL MOVED'));
+  check("lede wet variant", h.includes("our correspondent at the kitchen sink reports water.") && true); }
 
 { const st = base(); st["timer.front_yard_drip"] = S("active", { finishes_at: new Date(now.getTime() + 42 * 60000).toISOString() });
   const el = await make(st); const h = el.shadowRoot.innerHTML;
