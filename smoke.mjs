@@ -13,7 +13,8 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 const now = new Date(); const day0 = new Date(now); day0.setHours(0, 0, 0, 0);
 const dayIso = (off) => new Date(day0.getTime() + off * 86400000).toISOString();
 const rows = [409, 197, 246, 372, 163, 535, 260, 133, 86, 263, 538, 354, 211, 352].map((g, i) => ({ start: dayIso(i - 14), change: g })).concat([{ start: dayIso(0), change: 130 }]);
-const stats = async (m) => (m.type === "recorder/statistics_during_period" ? { "sensor.water_meter_reading": rows } : {});
+let floodRows = {};
+const stats = async (m) => m.type === "recorder/statistics_during_period" ? { "sensor.water_meter_reading": rows } : m.type === "history/history_during_period" ? floodRows : {};
 const S = (v, extra) => ({ state: String(v), attributes: extra || {} });
 const base = () => ({
   "sensor.water_meter_reading": S(511920.6), "sensor.water_meter_water_today": S(149.4), "sensor.water_meter_water_this_month": S(6248.5), "sensor.water_meter_water_flow": S(0.6),
@@ -74,5 +75,29 @@ check("setConfig rejects missing meter_entity", (() => { try { new Card().setCon
   store.set("hwc-h:sensor.water_meter_reading", "812");
   const el2 = new Card(); el2.setConfig(cfg()); el2.hass = { states: base(), callWS: () => new Promise(() => {}) }; await tick();
   check("stats pending: reserves remembered height", el2.style.minHeight === "812px"); }
+
+{ floodRows = { "binary_sensor.kitchen_kitchen_sink_leak_flood": [{ s: "off", lu: (Date.now() - 30 * 86400000) / 1000 }, { s: "on", lu: (Date.now() - 26 * 60000) / 1000 }, { s: "off", lu: (Date.now() - 25 * 60000) / 1000 }] };
+  const el = await make(base()); const h = el.shadowRoot.innerHTML;
+  check("resolved incident: puck remembers the times", /Water (at|yesterday) \d{1,2}:\d{2} [AP]M · dry by \d{1,2}:\d{2} [AP]M/.test(h) && h.includes('class="puck was"'));
+  check("corrections box: duration one minute", h.includes("CORRECTION &amp; AMPLIFICATION") && /The kitchen sink reported water at \d{1,2}:\d{2} [AP]M( yesterday)?\. The floor has since retracted its statement\. Duration of the scandal: one minute\./.test(h));
+  check("kicker streak: DRY 0 DAYS", h.includes("OVERNIGHT · 0.0 GAL MOVED · DRY 0 DAYS"));
+  check("lede: retraction clause", /filed a wet dispatch at \d{1,2}:\d{2} [AP]M and retracted it a minute later; the others report dry\./.test(h));
+  check("no STOP PRESS after resolution", !h.includes("STOP PRESS"));
+  floodRows = {}; }
+
+{ const on12 = Date.now() - 12 * 86400000 - 7200000, off12 = on12 + 300000;
+  floodRows = { "binary_sensor.kitchen_kitchen_sink_leak_flood": [{ s: "off", lu: (Date.now() - 200 * 86400000) / 1000 }, { s: "on", lu: on12 / 1000 }, { s: "off", lu: off12 / 1000 }] };
+  const el = await make(base()); const h = el.shadowRoot.innerHTML;
+  check("old incident: DRY 12 DAYS, no box, pucks dry", h.includes("· DRY 12 DAYS") && !h.includes("CORRECTION") && (h.match(/Dry, nothing to report/g) || []).length === 3);
+  floodRows = { "binary_sensor.kitchen_kitchen_sink_leak_flood": [{ s: "off", lu: (Date.now() - 300 * 86400000) / 1000 }] };
+  const el2 = await make(base()); const h2 = el2.shadowRoot.innerHTML;
+  check("no incidents on record: DRY 300+ DAYS", h2.includes("· DRY 300+ DAYS"));
+  floodRows = {}; }
+
+{ floodRows = { "binary_sensor.kitchen_kitchen_sink_leak_flood": [{ s: "off", lu: (Date.now() - 30 * 86400000) / 1000 }, { s: "on", lu: (Date.now() - 10800000) / 1000 }, { s: "off", lu: (Date.now() - 7200000) / 1000 }] };
+  const st = base(); st["binary_sensor.kitchen_kitchen_sink_leak_flood"] = S("on");
+  const el = await make(st); const h = el.shadowRoot.innerHTML;
+  check("wet again: STOP PRESS back, box and streak suppressed", h.includes("STOP PRESS") && !h.includes("CORRECTION") && !/DRY \d/.test(h));
+  floodRows = {}; }
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed"); process.exit(fails ? 1 : 0);

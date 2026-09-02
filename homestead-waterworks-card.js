@@ -3,7 +3,7 @@
  * a hatched 14-day bar chart from recorder statistics, a five-cell ledger, irrigation rows
  * and the leak pucks filing as "From our correspondents". Read-only: tap → more-info.
  * Companion to almanac-weather-card / network-ledger-card / homestead-classifieds-card. */
-const HWC_VERSION = "2026.9.2";
+const HWC_VERSION = "2026.9.3";
 const INK = "#3a2d1f", PAPER = "#f3e7d3", TAN = "#a3876a", BROWN = "#7a6248",
   TERRA = "#c65f38", BLUE = "#5f7e94", DOT = "#cfb894", GREEN = "#2f7f6f";
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -17,6 +17,7 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const hourWord = (d) => { let h = d.getHours(); const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return d.getMinutes() >= 30 ? `~${(h % 12) + 1} ${h === 11 ? (ap === "AM" ? "PM" : "AM") : ap}` : `~${h} ${ap}`; };
 const durWord = (secs) => { const m = Math.round(secs / 60); const h = Math.floor(m / 60), r = m % 60; return h ? `${h} h ${pad2(r)} m` : `${m} min`; };
+const hm = (d) => { let h = d.getHours(); const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return `${h}:${pad2(d.getMinutes())} ${ap}`; };
 
 class HomesteadWaterworksCard extends HTMLElement {
   static getStubConfig() { return { meter_entity: "sensor.water_meter_reading", today_entity: "sensor.water_meter_water_today" }; }
@@ -34,7 +35,7 @@ class HomesteadWaterworksCard extends HTMLElement {
       valve_entity: "", timer_entity: "", automation_entity: "", interval_days: 5 }, config.irrigation || {});
     this._cfg = c;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
-    this._sig = null; this._stats = null; this._statsAt = 0; this._statsDay = "";
+    this._sig = null; this._stats = null; this._statsAt = 0; this._statsDay = ""; this._flood = null;
     if (this._fontsReady === undefined) {
       const fonts = typeof document !== "undefined" && document.fonts;
       this._fontsReady = !fonts;
@@ -42,7 +43,14 @@ class HomesteadWaterworksCard extends HTMLElement {
     }
     this._render();
   }
-  set hass(hass) { this._hass = hass; this._maybeFetchStats(); this._render(); }
+  set hass(hass) {
+    this._hass = hass;
+    // a correspondent drying off should surface in print promptly — force a history refetch
+    const wk = ((this._cfg && this._cfg.correspondents) || []).map((p) => { const s = this._st(p.entity); return s && s.state === "on" ? "1" : "0"; }).join("");
+    if (this._wetKey !== undefined && wk !== this._wetKey) this._statsAt = 0;
+    this._wetKey = wk;
+    this._maybeFetchStats(); this._render();
+  }
   getCardSize() { return 9; }
   connectedCallback() { this._tick = setInterval(() => this._render(), 60000); }
   disconnectedCallback() { clearInterval(this._tick); }
@@ -59,6 +67,21 @@ class HomesteadWaterworksCard extends HTMLElement {
       const r = await this._hass.callWS({ type: "recorder/statistics_during_period", start_time: start.toISOString(), statistic_ids: [this._cfg.meter_entity], period: "day", types: ["change"] });
       const rows = (r && r[this._cfg.meter_entity]) || [];
       this._stats = rows.map((x) => ({ day: ymd(new Date(x.start)), gal: x.change == null ? null : Math.max(0, x.change) })).filter((x) => x.gal != null);
+      const ents = [...(this._cfg.correspondents || []).map((p) => p.entity), this._cfg.leak_entity].filter(Boolean);
+      if (ents.length) {
+        try {
+          const s2 = new Date(Date.now() - 365 * 86400000);
+          const r2 = await this._hass.callWS({ type: "history/history_during_period", start_time: s2.toISOString(), entity_ids: ents, minimal_response: true, no_attributes: true });
+          const map = {};
+          for (const id of ents) {
+            const hrows = (r2 && r2[id]) || []; const inc = []; let cur = null;
+            for (const x of hrows) { if (x.s === "on") { if (!cur) cur = { on: new Date(x.lu * 1000), off: null }; } else if (cur) { cur.off = new Date(x.lu * 1000); inc.push(cur); cur = null; } }
+            if (cur) inc.push(cur);
+            map[id] = { incidents: inc, since: hrows.length ? new Date(hrows[0].lu * 1000) : null };
+          }
+          this._flood = map;
+        } catch (e) { /* keep the last incident rows */ }
+      } else this._flood = {};
       this._statsAt = Date.now(); this._statsDay = day; this._sig = null; this._render();
     } catch (e) { /* keep the last rows */ }
     finally { this._fetching = false; }
@@ -108,7 +131,14 @@ class HomesteadWaterworksCard extends HTMLElement {
     return { row: `${when}, ${hourWord(next)}${durTxt ? " · " + durTxt : ""}`, lede: `waters ${whenLede}${durTxt ? " for " + durTxt.replace(" 00 m", "") : ""}`, entity: ir.automation_entity };
   }
   _correspondents() {
-    return (this._cfg.correspondents || []).map((p) => { const s = this._st(p.entity); return { name: p.name || p.entity, entity: p.entity, wet: !!s && s.state === "on", known: !!s }; });
+    const now = Date.now();
+    return (this._cfg.correspondents || []).map((p) => {
+      const s = this._st(p.entity);
+      const fl = this._flood && this._flood[p.entity];
+      const inc = fl && fl.incidents.length ? fl.incidents[fl.incidents.length - 1] : null;
+      const recent = inc && inc.off && now - inc.off.getTime() < 24 * 3600000 ? inc : null;
+      return { name: p.name || p.entity, entity: p.entity, wet: !!s && s.state === "on", known: !!s, recent };
+    });
   }
 
   // ---------- render ----------
@@ -154,7 +184,10 @@ class HomesteadWaterworksCard extends HTMLElement {
     let lede = `The main reported ${band ? (band.mood === "ordinary" ? "an ordinary" : "a " + band.mood) : "a"} ${DAYS[now.getDay()]}: ${s.todayGal == null ? "no reading" : fmt(Math.round(s.todayGal)) + " gallons"} by press time${band ? ", " + band.lede : ""}. `;
     if (ir.duration_entity || ir.automation_entity) lede += `The ${ir.name.toLowerCase()}${bucketTxt} ${skip ? "stands down for rain" : water.lede}; `;
     else lede += "";
+    const retract = (i) => { const m = Math.max(1, Math.round((i.off - i.on) / 60000)); return m < 2 ? "a minute later" : m < 60 ? `${m} minutes later` : `${Math.floor(m / 60)} hour${Math.floor(m / 60) > 1 ? "s" : ""} later`; };
+    const recentP = corr.filter((p) => p.recent && !p.wet).sort((a, b) => b.recent.off - a.recent.off)[0];
     lede += wet.length ? `our correspondent at ${lc(wet[0].name)} reports water${wet.length > 1 ? ", and so does " + lc(wet[1].name) : ""}.`
+      : recentP ? `our correspondent at ${lc(recentP.name)} filed a wet dispatch at ${hm(recentP.recent.on)} and retracted it ${retract(recentP.recent)}${corr.length > 1 ? "; the others report dry" : ""}.`
       : corr.length ? `our correspondents at ${nameList} all file the same dispatch: dry, nothing to report.` : "";
 
     // plate
@@ -204,9 +237,38 @@ class HomesteadWaterworksCard extends HTMLElement {
     // correspondents
     let corrHtml = "";
     if (corr.length) {
-      const right = overnight == null ? "" : `OVERNIGHT · ${fmt(overnight, 1)} GAL MOVED`;
+      let streak = "";
+      if (!wet.length && this._flood) {
+        let lastEnd = null, since = null;
+        for (const id of Object.keys(this._flood)) { const f = this._flood[id]; if (f.since && (!since || f.since < since)) since = f.since; for (const i of f.incidents) { const e = i.off || new Date(); if (!lastEnd || e > lastEnd) lastEnd = e; } }
+        if (lastEnd) { const d = Math.floor((Date.now() - lastEnd.getTime()) / 86400000); streak = ` · DRY ${d} ${d === 1 ? "DAY" : "DAYS"}`; }
+        else if (since) { const d = Math.floor((Date.now() - since.getTime()) / 86400000); streak = ` · DRY ${d}+ DAYS`; }
+      }
+      const right = (overnight == null ? "" : `OVERNIGHT · ${fmt(overnight, 1)} GAL MOVED`) + streak;
+      const puckTxt = (p) => p.wet ? "WATER — reports our correspondent"
+        : p.recent ? `Water ${ymd(p.recent.on) === ymd(new Date()) ? "at" : "yesterday"} ${hm(p.recent.on)} · dry by ${hm(p.recent.off)}`
+        : p.known ? "Dry, nothing to report" : "No dispatch received";
       corrHtml = `<div class="sub"><span class="subn">From our correspondents</span><span class="subr${overnight > 0 ? " hot" : ""}">${esc(right)}</span></div>
-      <div class="sent">${corr.map((p) => `<div class="puck${p.wet ? " wet" : ""}" data-entity="${esc(p.entity)}"><div class="pn">${esc(p.name).toUpperCase()}</div><div class="ps">${p.wet ? "WATER — reports our correspondent" : p.known ? "Dry, nothing to report" : "No dispatch received"}</div></div>`).join("")}</div>`;
+      <div class="sent">${corr.map((p) => `<div class="puck${p.wet ? " wet" : p.recent ? " was" : ""}" data-entity="${esc(p.entity)}"><div class="pn">${esc(p.name).toUpperCase()}</div><div class="ps">${puckTxt(p)}</div></div>`).join("")}</div>`;
+    }
+
+    // corrections & amplifications — the most recent resolved incident, through the following noon
+    let corrBox = "";
+    if (this._flood && !wet.length) {
+      let best = null, bestName = "", bestEnt = "";
+      for (const p of this._cfg.correspondents || []) { const f = this._flood[p.entity]; if (!f) continue; for (const i of f.incidents) { if (i.off && (!best || i.off > best.off)) { best = i; bestName = p.name || p.entity; bestEnt = p.entity; } } }
+      if (best) {
+        const today0 = new Date(now); today0.setHours(0, 0, 0, 0);
+        const show = best.off >= today0 || (best.off >= new Date(today0.getTime() - 86400000) && now.getHours() < 12);
+        if (show) {
+          const mins = Math.max(1, Math.round((best.off - best.on) / 60000));
+          const dur = mins < 2 ? "one minute" : mins < 60 ? `${mins} minutes` : `${Math.floor(mins / 60)} hour${Math.floor(mins / 60) > 1 ? "s" : ""}${mins % 60 ? " " + (mins % 60) + " minutes" : ""}`;
+          const when = ymd(best.on) === ymd(now) ? "" : " yesterday";
+          const dayCount = (this._cfg.correspondents || []).reduce((a, p) => a + ((this._flood[p.entity] || { incidents: [] }).incidents.filter((i) => i.off && ymd(i.off) === ymd(best.off)).length), 0);
+          const nth = ["", "", "second", "third", "fourth"][Math.min(dayCount, 4)];
+          corrBox = `<div class="corr" data-entity="${esc(bestEnt)}"><div class="corrh">CORRECTION &amp; AMPLIFICATION</div><div class="corrb">${esc(lc(bestName).replace(/^t/, "T"))} reported water at ${hm(best.on)}${when}. The floor has since retracted its statement. Duration of the scandal: ${dur}.${dayCount > 1 ? ` It was the ${nth} such report of the day.` : ""}</div></div>`;
+        }
+      }
     }
 
     // stop press
@@ -218,7 +280,7 @@ class HomesteadWaterworksCard extends HTMLElement {
       <div class="dek">${esc(dek)}</div>
       ${plate}${plateCap}
       <p class="lede">${esc(lede)}</p>
-      ${chart}${strip}${irr}${corrHtml}
+      ${chart}${strip}${irr}${corrHtml}${corrBox}
       ${c.footer ? `<div class="foot">${esc(c.footer)}</div>` : ""}`;
     return { sig: body, html: `<style>${this._css()}</style><div class="wrap"><div class="card">${body}</div></div>` };
   }
@@ -292,6 +354,10 @@ class HomesteadWaterworksCard extends HTMLElement {
   .puck { border: 1px solid ${DOT}; padding: calc(6*var(--px)) calc(8*var(--px)); cursor: pointer; } .puck.wet { border-color: ${TERRA}; }
   .pn { font-size: max(7px, calc(9*var(--px))); font-weight: 700; letter-spacing: 1.5px; color: ${TAN}; }
   .ps { font-family: Fraunces, Georgia, serif; font-size: max(10px, calc(12.5*var(--px))); font-weight: 600; color: ${GREEN}; margin-top: 2px; } .puck.wet .ps { color: ${TERRA}; }
+  .puck.was { border-color: ${BROWN}; } .puck.was .ps { color: ${BROWN}; }
+  .corr { border: 1.5px solid ${INK}; margin-top: calc(12*var(--px)); padding: calc(7*var(--px)) calc(10*var(--px)); cursor: pointer; }
+  .corrh { font-size: max(7px, calc(8.5*var(--px))); font-weight: 700; letter-spacing: calc(2*var(--px)); color: ${TAN}; text-align: center; }
+  .corrb { font-family: Fraunces, Georgia, serif; font-size: max(10px, calc(12*var(--px))); font-style: italic; text-align: center; margin-top: calc(4*var(--px)); line-height: 1.4; }
   .foot { font-size: max(7px, calc(9*var(--px))); letter-spacing: .3px; color: ${TAN}; margin-top: calc(12*var(--px)); line-height: 1.5; }
   @container (max-width: 380px) { .sent { grid-template-columns: 1fr; } }`;
   }
