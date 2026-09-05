@@ -5,7 +5,7 @@
  * box and the dry-streak), and the mains demoted to a one-line agate brief. Read-only: tap →
  * more-info. Companion to almanac-weather-card / network-ledger-card / homestead-classifieds-card
  * / homestead-pool-card / homestead-motoring-card. */
-const HWC_VERSION = "2026.9.4";
+const HWC_VERSION = "2026.9.5";
 const INK = "#3a2d1f", PAPER = "#f3e7d3", TAN = "#a3876a", BROWN = "#7a6248",
   TERRA = "#c65f38", BLUE = "#5f7e94", DOT = "#cfb894", GREEN = "#2f7f6f", RED = "#7e1d10";
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -252,9 +252,10 @@ class HomesteadWaterworksCard extends HTMLElement {
     const press = leakOn || wet.length ? `<div class="press">STOP PRESS · WATER AT THE ${esc((wet[0] ? wet[0].name : "premises").toUpperCase())}</div>` : "";
 
     // the mains, in agate
-    const ratio = s.avg && s.todayGal != null ? s.todayGal / s.avg : null;
+    const ratio = s.avg && s.todayGal != null && s.todayGal >= 10 ? s.todayGal / s.avg : null;
     const band = this._band(ratio);
-    const agate = `<div class="agate" data-entity="${esc(c.today_entity || c.meter_entity)}"><b>THE MAINS, IN BRIEF.</b> ${s.todayGal == null ? "No reading filed" : fmt(Math.round(s.todayGal)) + " gallons drawn by press time"}${band ? ", " + band : ""}${flow != null ? "; flow " + fmt(flow, 1) + " gal/min" : ""}${month != null ? "; month " + fmt(Math.round(month)) : ""}. ${esc(c.agate_tail)}</div>`;
+    const young = s.todayGal != null && s.todayGal < 10 ? ", the day being young" : "";
+    const agate = `<div class="agate" data-entity="${esc(c.today_entity || c.meter_entity)}"><b>THE MAINS, IN BRIEF.</b> ${s.todayGal == null ? "No reading filed" : fmt(Math.round(s.todayGal)) + " gallons drawn by press time"}${band ? ", " + band : young}${flow != null ? "; flow " + fmt(flow, 1) + " gal/min" : ""}${month != null ? "; month " + fmt(Math.round(month)) : ""}. ${esc(c.agate_tail)}</div>`;
 
     const body = `<div class="sect"><span>${esc(c.title)}</span><span class="sectr">${esc(c.kicker)}</span></div>
       ${press}
