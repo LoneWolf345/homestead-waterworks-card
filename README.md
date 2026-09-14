@@ -61,6 +61,7 @@ correspondents:
 | `meter_entity` | required | `total_increasing` gallons; feeds the agate via statistics |
 | `today_entity`, `month_entity`, `flow_entity` | `''` | Utility meters; flow in gal/min |
 | `rain_gauge_entity` | `''` | `total_increasing` inches; 24-h credit + season figure |
+| `rain_now_entity` | `''` | A rain-now binary sensor (a weather station's moisture flag). While it's on the headline reads *Rain falling at press time: 0.02 in and counting*, the credit row reads *falling now*, and the settlement stands down. A `paused` run timer prints *Paused for rain · N min remain* |
 | `irrigation.*` | see YAML | `name`, `zone`, `duration_entity` (s), `bucket_entity`, `et_entity`, `drainage_entity`, `rain_entity`, `skip_threshold`, `timer_entity`, `automation_entity`, `interval_days` |
 | `valves`, `contracted_valves` | `[]`, `1` | Valve entities for the dispatch line |
 | `correspondents` | `[]` | `[{name, entity}]` flood binary sensors |

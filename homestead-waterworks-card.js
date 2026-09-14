@@ -5,7 +5,7 @@
  * box and the dry-streak), and the mains demoted to a one-line agate brief. Read-only: tap →
  * more-info. Companion to almanac-weather-card / network-ledger-card / homestead-classifieds-card
  * / homestead-pool-card / homestead-motoring-card. */
-const HWC_VERSION = "2026.9.6";
+const HWC_VERSION = "2026.9.7";
 const INK = "#3a2d1f", PAPER = "#f3e7d3", TAN = "#a3876a", BROWN = "#7a6248",
   TERRA = "#c65f38", BLUE = "#5f7e94", DOT = "#cfb894", GREEN = "#2f7f6f", RED = "#7e1d10";
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -31,7 +31,7 @@ class HomesteadWaterworksCard extends HTMLElement {
     const c = Object.assign({
       title: "THE WATERWORKS", kicker: "GARDENS DESK", meter_number: "", today_entity: "", month_entity: "", flow_entity: "",
       days: 14, dek: "Being a true account of water credited to and debited from the front yard",
-      rain_gauge_entity: "", correspondents: [], overnight_entity: "", leak_entity: "", valves: [], contracted_valves: 1,
+      rain_gauge_entity: "", rain_now_entity: "", correspondents: [], overnight_entity: "", leak_entity: "", valves: [], contracted_valves: 1,
       column_rule: false,
       footer: "",
       agate_tail: "Fuller accounts available upon request, and rendered nightly regardless.",
@@ -55,7 +55,7 @@ class HomesteadWaterworksCard extends HTMLElement {
     if (this._wetKey !== undefined && wk !== this._wetKey) this._statsAt = 0;
     this._wetKey = wk;
     // the gauge ticking is news — refresh the 24-hour rain credit the moment it does
-    const rk = this._cfg && this._cfg.rain_gauge_entity ? (this._st(this._cfg.rain_gauge_entity) || {}).state : undefined;
+    const rk = this._cfg && this._cfg.rain_gauge_entity ? (this._st(this._cfg.rain_gauge_entity) || {}).state + "|" + ((this._cfg.rain_now_entity && this._st(this._cfg.rain_now_entity)) || {}).state : undefined;
     if (this._rainKey !== undefined && rk !== this._rainKey) this._fetchRain();
     this._rainKey = rk;
     this._maybeFetchStats(); this._render();
@@ -139,6 +139,12 @@ class HomesteadWaterworksCard extends HTMLElement {
       const left = fin ? Math.max(0, Math.round((fin - Date.now()) / 60000)) : null;
       return { row: left != null ? `In progress · ${left} min remain` : "In progress", now: true, entity: ir.timer_entity, dur };
     }
+    if (timer && timer.state === "paused") {
+      // the rain-pause automation parks the run timer; HA keeps the balance in `remaining` as H:MM:SS
+      const p = String(timer.attributes.remaining || "").split(":").map(Number);
+      const mins = p.length === 3 && p.every((n) => !isNaN(n)) ? p[0] * 60 + p[1] : null;
+      return { row: mins != null ? `Paused for rain · ${mins} min remain` : "Paused for rain", now: false, paused: true, entity: ir.timer_entity, dur };
+    }
     const auto = this._st(ir.automation_entity);
     const last = auto && auto.attributes.last_triggered ? new Date(auto.attributes.last_triggered) : null;
     if (!last) return { row: durTxt ? `At the next start · ${durTxt}` : "At the next start", entity: ir.automation_entity, dur, last: null };
@@ -191,10 +197,13 @@ class HomesteadWaterworksCard extends HTMLElement {
     const skip = rainF != null && rainF >= ir.skip_threshold;
     const rain24 = this._rain24;
     const wateredToday = water.last && now - water.last < 24 * 3600000;
+    const rainNow = c.rain_now_entity ? this._st(c.rain_now_entity) : null;
+    const raining = !!(rainNow && rainNow.state === "on");
 
     // headline
     let head;
-    if (water.now) head = `Settlement in progress: ${ir.zone} pays the yard ${water.dur != null ? durWord(water.dur) : "its due"}`;
+    if (raining) head = rain24 > 0 ? `Rain falling at press time: ${fmt(rain24, 2)} in and counting` : "Rain falling at press time, the gauge yet to stir";
+    else if (water.now) head =`Settlement in progress: ${ir.zone} pays the yard ${water.dur != null ? durWord(water.dur) : "its due"}`;
     else if (skip) head = `The sky assumes the debt: ${fmt(rainF, 2)} in expected within the day`;
     else if (bucket == null) head = "The gardens desk awaits its figures";
     else if (bucket < -0.02) head = et != null ? `The sun takes ${etWord(et)}; the soil is owed ${fmt(Math.abs(bucket), 2)}` : `The soil is owed ${fmt(Math.abs(bucket), 2)}, and the sun says nothing`;
@@ -207,7 +216,7 @@ class HomesteadWaterworksCard extends HTMLElement {
     const book = `<div class="book">
       <div class="bh"><span>ACCOUNT OF ${esc(String(ir.name).toUpperCase())}</span><span>INCHES</span></div>
       <div class="bsub">CREDITS</div>
-      ${lrow("Rain", "the sky, last 24 hours", rain24 == null ? "—" : fmt(rain24, 2), rain24 > 0 ? "cr" : "", c.rain_gauge_entity)}
+      ${lrow("Rain", raining ? "the sky, falling now" : "the sky, last 24 hours", rain24 == null ? "—" : fmt(rain24, 2), rain24 > 0 || raining ? "cr" : "", raining ? c.rain_now_entity : c.rain_gauge_entity)}
       ${wateredToday ? lrow("Irrigation", `${esc(ir.zone)}, ${esc(hm(water.last))}`, "paid", "cr", ir.automation_entity) : ""}
       ${lrow("Rain promised", "unredeemed", rainF == null ? "—" : fmt(rainF, 2), "", ir.rain_entity)}
       <div class="bsub">DEBITS</div>
@@ -215,7 +224,7 @@ class HomesteadWaterworksCard extends HTMLElement {
       ${lrow("Drainage", "the caliche", drain == null ? "0.00" : fmt(Math.abs(drain), 2), "", ir.drainage_entity)}
       <div class="bal" data-entity="${esc(ir.bucket_entity)}"><span class="d">${owed ? "BALANCE OWED TO THE SOIL" : "BALANCE, IN THE SOIL'S FAVOR"}</span><span class="a${owed ? "" : " up"}">${bucket == null ? "—" : (bucket < 0 ? "−" : "+") + fmt(Math.abs(bucket), 2)}</span></div>
     </div>
-    <div class="settle"><span data-entity="${esc(water.entity || "")}"><b>SETTLEMENT</b> ${esc(skip && !water.now ? "Stands down · rain" : water.row)}</span><span data-entity="${esc(c.rain_gauge_entity)}"><b>SEASON RAIN</b> ${gauge == null ? "—" : fmt(gauge, 2) + " in"}</span></div>`;
+    <div class="settle"><span data-entity="${esc(water.entity || "")}"><b>SETTLEMENT</b> ${esc(water.paused ? water.row : (skip || raining) && !water.now ? "Stands down · rain" : water.row)}</span><span data-entity="${esc(c.rain_gauge_entity)}"><b>SEASON RAIN</b> ${gauge == null ? "—" : fmt(gauge, 2) + " in"}</span></div>`;
 
     // dispatches
     const lcn = (n) => String(n).replace(/^([A-Z])(?=[a-z])/, (m) => m.toLowerCase()); // keeps acronyms like "RO filter"

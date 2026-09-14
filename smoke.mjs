@@ -97,6 +97,18 @@ check("setConfig rejects missing meter_entity", (() => { try { new Card().setCon
   check("dry day: 0.00, not credited", /class="a">0\.00</.test(h4));
   rainRows = []; }
 
+// the station's rain-now flag: headline, the credit row reads "falling now", settlement stands down
+{ rainRows = [{ s: "0.47", lu: 1 }, { s: "0.49", lu: 2 }];
+  const st = base(); st["sensor.rainfall_cumulative"] = S(0.49); st["binary_sensor.weather_station_moisture"] = S("on");
+  const c = cfg(); c.rain_now_entity = "binary_sensor.weather_station_moisture";
+  const el = await make(st, c); const h = el.shadowRoot.innerHTML;
+  check("raining: headline + falling-now row + stands down", h.includes("Rain falling at press time: 0.02 in and counting") && h.includes("the sky, falling now") && /class="a cr">0\.02</.test(h) && h.includes("SETTLEMENT</b> Stands down · rain"));
+  // the rain-pause automation parks the run timer → the settlement line says so
+  st["timer.front_yard_drip"] = S("paused", { remaining: "0:37:12" });
+  el.hass = { states: st, callWS: stats }; await tick(); await tick(); const h2 = el.shadowRoot.innerHTML;
+  check("paused run: settlement reads paused for rain with minutes", h2.includes("SETTLEMENT</b> Paused for rain · 37 min remain"));
+  rainRows = []; }
+
 { const st = base(); st["binary_sensor.kitchen_kitchen_sink_leak_flood"] = S("on");
   const el = await make(st); const h = el.shadowRoot.innerHTML;
   check("wet: STOP PRESS + leak desk water line", h.includes("STOP PRESS · WATER AT THE KITCHEN SINK") && h.includes("WATER at the kitchen sink") && !h.includes("CORRECTION")); }
