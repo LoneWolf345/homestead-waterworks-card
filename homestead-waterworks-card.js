@@ -5,7 +5,7 @@
  * box and the dry-streak), and the mains demoted to a one-line agate brief. Read-only: tap →
  * more-info. Companion to almanac-weather-card / network-ledger-card / homestead-classifieds-card
  * / homestead-pool-card / homestead-motoring-card. */
-const HWC_VERSION = "2026.9.7";
+const HWC_VERSION = "2026.9.8";
 const INK = "#3a2d1f", PAPER = "#f3e7d3", TAN = "#a3876a", BROWN = "#7a6248",
   TERRA = "#c65f38", BLUE = "#5f7e94", DOT = "#cfb894", GREEN = "#2f7f6f", RED = "#7e1d10";
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -29,7 +29,7 @@ class HomesteadWaterworksCard extends HTMLElement {
   setConfig(config) {
     if (!config || !config.meter_entity) throw new Error("homestead-waterworks-card: set meter_entity (the total_increasing meter reading)");
     const c = Object.assign({
-      title: "THE WATERWORKS", kicker: "GARDENS DESK", meter_number: "", today_entity: "", month_entity: "", flow_entity: "",
+      title: "THE WATERWORKS", kicker: "GARDENS DESK", today_entity: "", month_entity: "", flow_entity: "",
       days: 14, dek: "Being a true account of water credited to and debited from the front yard",
       rain_gauge_entity: "", rain_now_entity: "", correspondents: [], overnight_entity: "", leak_entity: "", valves: [], contracted_valves: 1,
       column_rule: false,
@@ -37,10 +37,12 @@ class HomesteadWaterworksCard extends HTMLElement {
       agate_tail: "Fuller accounts available upon request, and rendered nightly regardless.",
     }, config);
     c.irrigation = Object.assign({ name: "the front yard", zone: "the drip", duration_entity: "", bucket_entity: "", rain_entity: "", skip_threshold: 0.1,
-      et_entity: "", drainage_entity: "", valve_entity: "", timer_entity: "", automation_entity: "", interval_days: 5 }, config.irrigation || {});
+      et_entity: "", drainage_entity: "", timer_entity: "", automation_entity: "", interval_days: 5 }, config.irrigation || {});
     this._cfg = c;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._sig = null; this._stats = null; this._statsAt = 0; this._statsDay = ""; this._flood = null; this._rain24 = null;
+    // a new config retires any fetch still in flight: its result is checked against this number after every await
+    this._fetchSeq = (this._fetchSeq || 0) + 1; this._fetching = false; this._rainFetching = false;
     if (this._fontsReady === undefined) {
       const fonts = typeof document !== "undefined" && document.fonts;
       this._fontsReady = !fonts;
@@ -71,17 +73,21 @@ class HomesteadWaterworksCard extends HTMLElement {
     const day = ymd(new Date());
     if (this._fetching || (Date.now() - this._statsAt < 30 * 60000 && this._statsDay === day)) return;
     this._fetching = true;
+    const seq = this._fetchSeq;
     try {
       const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - this._cfg.days);
       const r = await this._hass.callWS({ type: "recorder/statistics_during_period", start_time: start.toISOString(), statistic_ids: [this._cfg.meter_entity], period: "day", types: ["change"] });
+      if (seq !== this._fetchSeq) return;
       const rows = (r && r[this._cfg.meter_entity]) || [];
       this._stats = rows.map((x) => ({ day: ymd(new Date(x.start)), gal: x.change == null ? null : Math.max(0, x.change) })).filter((x) => x.gal != null);
       await this._fetchRain();
+      if (seq !== this._fetchSeq) return;
       const ents = [...(this._cfg.correspondents || []).map((p) => p.entity), this._cfg.leak_entity].filter(Boolean);
       if (ents.length) {
         try {
           const s2 = new Date(Date.now() - 365 * 86400000);
           const r2 = await this._hass.callWS({ type: "history/history_during_period", start_time: s2.toISOString(), entity_ids: ents, minimal_response: true, no_attributes: true });
+          if (seq !== this._fetchSeq) return;
           const map = {};
           for (const id of ents) {
             const hrows = (r2 && r2[id]) || []; const inc = []; let cur = null;
@@ -94,7 +100,7 @@ class HomesteadWaterworksCard extends HTMLElement {
       } else this._flood = {};
       this._statsAt = Date.now(); this._statsDay = day; this._sig = null; this._render();
     } catch (e) { /* keep the last rows */ }
-    finally { this._fetching = false; }
+    finally { if (seq === this._fetchSeq) this._fetching = false; }
   }
   // Rain in the last 24 hours: the gauge's reading now against its reading a day ago, read from
   // history rather than compiled statistics so a shower prints as soon as the gauge ticks.
@@ -103,15 +109,17 @@ class HomesteadWaterworksCard extends HTMLElement {
     const id = this._cfg && this._cfg.rain_gauge_entity;
     if (!id || !this._hass || this._rainFetching) return;
     this._rainFetching = true;
+    const seq = this._fetchSeq;
     try {
       const r = await this._hass.callWS({ type: "history/history_during_period", start_time: new Date(Date.now() - 24 * 3600000).toISOString(), entity_ids: [id], minimal_response: true, no_attributes: true });
+      if (seq !== this._fetchSeq) return;
       const pts = ((r && r[id]) || []).map((x) => num(x.s)).filter((v) => v != null);
       const live = this._val(id); if (live != null) pts.push(live);
       let sum = 0; for (let i = 1; i < pts.length; i++) { const d = pts[i] - pts[i - 1]; if (d > 0) sum += d; }
       this._rain24 = pts.length ? sum : null;
       this._sig = null; this._render();
     } catch (e) { /* keep the last figure */ }
-    finally { this._rainFetching = false; }
+    finally { if (seq === this._fetchSeq) this._rainFetching = false; }
   }
   _series() {
     const today = ymd(new Date());
@@ -148,9 +156,11 @@ class HomesteadWaterworksCard extends HTMLElement {
     const auto = this._st(ir.automation_entity);
     const last = auto && auto.attributes.last_triggered ? new Date(auto.attributes.last_triggered) : null;
     if (!last) return { row: durTxt ? `At the next start · ${durTxt}` : "At the next start", entity: ir.automation_entity, dur, last: null };
-    const next = new Date(last.getTime() + ir.interval_days * 86400000), now = new Date();
+    // calendar days, not milliseconds: a DST switch inside the interval must not shift the hour
+    const next = new Date(last); next.setDate(last.getDate() + ir.interval_days); const now = new Date();
     if (next < now) return { row: durTxt ? `At the next start · ${durTxt}` : "At the next start", entity: ir.automation_entity, dur, last };
-    const today = ymd(now), tmrw = ymd(new Date(now.getTime() + 86400000)), nd = ymd(next);
+    const t1 = new Date(now); t1.setDate(now.getDate() + 1);
+    const today = ymd(now), tmrw = ymd(t1), nd = ymd(next);
     const when = nd === today ? "Today" : nd === tmrw ? (next.getHours() < 6 ? "Tonight" : "Tomorrow") : DAY3[next.getDay()];
     return { row: `${when}, ${hourWord(next)}${durTxt ? " · " + durTxt : ""}`, entity: ir.automation_entity, dur, last };
   }
@@ -262,7 +272,8 @@ class HomesteadWaterworksCard extends HTMLElement {
       for (const p of c.correspondents || []) { const f = this._flood[p.entity]; if (!f) continue; for (const i of f.incidents) { if (i.off && (!best || i.off > best.off)) { best = i; bestName = p.name || p.entity; bestEnt = p.entity; } } }
       if (best) {
         const today0 = new Date(now); today0.setHours(0, 0, 0, 0);
-        const show = best.off >= today0 || (best.off >= new Date(today0.getTime() - 86400000) && now.getHours() < 12);
+        const yday0 = new Date(today0); yday0.setDate(today0.getDate() - 1);
+        const show = best.off >= today0 || (best.off >= yday0 && now.getHours() < 12);
         if (show) {
           const mins = Math.max(1, Math.round((best.off - best.on) / 60000));
           const dur = mins < 2 ? "one minute" : mins < 60 ? `${mins} minutes` : `${Math.floor(mins / 60)} hour${Math.floor(mins / 60) > 1 ? "s" : ""}${mins % 60 ? " " + (mins % 60) + " minutes" : ""}`;
@@ -341,10 +352,11 @@ class HomesteadWaterworksCard extends HTMLElement {
   }
 }
 
-if (!document.getElementById("hwc-font")) {
+// One font sheet for every Homestead Times card: the first card to load injects it, the rest find it.
+if (!document.getElementById("homestead-times-font")) {
   const l = document.createElement("link");
-  l.id = "hwc-font"; l.rel = "stylesheet";
-  l.href = "https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,400&family=Archivo:wght@400;600;700&display=swap";
+  l.id = "homestead-times-font"; l.rel = "stylesheet";
+  l.href = "https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,400&family=Archivo:wght@400;500;600;700&display=swap";
   document.head.appendChild(l);
 }
 customElements.define("homestead-waterworks-card", HomesteadWaterworksCard);

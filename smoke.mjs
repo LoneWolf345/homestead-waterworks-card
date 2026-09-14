@@ -1,7 +1,8 @@
 // smoke.mjs — node harness for homestead-waterworks-card (Soil Ledger layout)
 import fs from "node:fs"; import vm from "node:vm";
 const src = fs.readFileSync(new URL("./homestead-waterworks-card.js", import.meta.url), "utf8");
-class HTMLElement { constructor() { this._sr = null; this.style = {}; this._h = 700; } attachShadow() { this._sr = { innerHTML: "", querySelectorAll: () => [], querySelector: () => null }; return this._sr; } get shadowRoot() { return this._sr; } dispatchEvent() {} getBoundingClientRect() { return { height: this._h }; } }
+// the shadow root counts innerHTML assignments (`_sets`) so the render-dedupe check can see a swap that should not happen
+class HTMLElement { constructor() { this._sr = null; this.style = {}; this._h = 700; this._sets = 0; } attachShadow() { const self = this; let html = ""; this._sr = { get innerHTML() { return html; }, set innerHTML(v) { html = v; self._sets++; }, querySelectorAll: () => [], querySelector: () => null }; return this._sr; } get shadowRoot() { return this._sr; } dispatchEvent() {} getBoundingClientRect() { return { height: this._h }; } }
 const defs = {}; const store = new Map();
 const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
 const ctx = { HTMLElement, customElements: { define: (n, c) => (defs[n] = c) }, document: { getElementById: () => null, createElement: () => ({}), head: { appendChild() {} } }, console, CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } }, setInterval: () => 0, clearInterval() {}, setTimeout, Date, localStorage };
@@ -41,7 +42,8 @@ const cfg = () => ({ meter_entity: "sensor.water_meter_reading", today_entity: "
   valves: ["valve.front_yard_drip", "valve.zone_2", "valve.zone_3", "valve.zone_4", "valve.zone_5", "valve.zone_6"], contracted_valves: 1,
   rain_gauge_entity: "sensor.rainfall_cumulative", overnight_entity: "input_number.water_overnight_leak_gal", leak_entity: "input_boolean.water_leak_detected",
   correspondents: [{ name: "Water heater", entity: "binary_sensor.water_heater_leak_flood" }, { name: "RO filter", entity: "binary_sensor.ro_filter_leak_flood" }, { name: "Kitchen sink", entity: "binary_sensor.kitchen_kitchen_sink_leak_flood" }] });
-const make = async (states, c) => { const el = new Card(); el.setConfig(c || cfg()); el.hass = { states, callWS: stats }; await tick(); await tick(); return el; };
+// three ticks: the fetch resolves on the first, the loaded render's _remember() fires 60 ms later
+const make = async (states, c) => { const el = new Card(); el.setConfig(c || cfg()); el.hass = { states, callWS: stats }; await tick(); await tick(); await tick(); return el; };
 
 check("card registered", typeof Card === "function");
 check("setConfig rejects missing meter_entity", (() => { try { new Card().setConfig({}); return false; } catch (e) { return /meter_entity/.test(e.message); } })());
@@ -124,5 +126,28 @@ check("setConfig rejects missing meter_entity", (() => { try { new Card().setCon
   store.set("hwc-h:sensor.water_meter_reading", "812");
   const el2 = new Card(); el2.setConfig(cfg()); el2.hass = { states: base(), callWS: () => new Promise(() => {}) }; await tick();
   check("stats pending: reserves remembered height", el2.style.minHeight === "812px"); }
+
+// ---- hostile strings, an unavailable meter, render dedupe, a config change mid-fetch
+{ const c = cfg(); c.correspondents = [{ name: "<img src=x onerror=alert(1)>", entity: "binary_sensor.water_heater_leak_flood" }];
+  const el = await make(base(), c); const h = el.shadowRoot.innerHTML;
+  check("hostile correspondent name prints escaped, never raw", h.includes("&lt;img src=x onerror=alert(1)&gt; file the same word") && !h.includes("<img src=x")); }
+
+{ const st = base(); st["sensor.water_meter_reading"] = S("unavailable"); st["sensor.water_meter_water_today"] = S("unavailable"); st["sensor.smart_irrigation_front_yard_drip_bucket"] = S("unavailable");
+  let el = null, threw = false; try { el = await make(st); } catch (e) { threw = true; }
+  const h = el ? el.shadowRoot.innerHTML : "";
+  check("unavailable meter/today/bucket: renders, no error shell, no NaN/undefined", !threw && h.includes("The gardens desk awaits its figures") && h.includes("No reading filed") && !h.includes("color:#b00") && !/NaN|undefined/.test(h)); }
+
+{ const el = new Card(); el.setConfig(cfg()); const hass = { states: base(), callWS: () => new Promise(() => {}) };
+  el.hass = hass; el.hass = hass; await tick();
+  check("render dedupe: the same hass twice → exactly one innerHTML assignment", el._sets === 1 && el.shadowRoot.innerHTML.includes("THE WATERWORKS")); }
+
+{ let resolve; const pending = new Promise((r) => { resolve = r; });
+  const el = new Card(); el.setConfig(cfg());
+  el.hass = { states: base(), callWS: (m) => (m.type === "recorder/statistics_during_period" ? pending : stats(m)) };
+  const c2 = cfg(); c2.meter_entity = "sensor.other_meter"; el.setConfig(c2);
+  resolve({ "sensor.water_meter_reading": rows }); await tick(); await tick();
+  check("setConfig mid-fetch: the stale statistics are discarded", el._stats === null && el._statsAt === 0);
+  el.hass = { states: base(), callWS: stats }; await tick(); await tick();
+  check("…and the next hass fetches afresh for the new config", Array.isArray(el._stats) && el._statsAt > 0); }
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed"); process.exit(fails ? 1 : 0);
