@@ -19,9 +19,11 @@ const stats = async (m) => {
   if (m.type === "recorder/statistics_during_period") {
     const id = (m.statistic_ids || [])[0];
     if (id === "sensor.water_meter_reading") return { "sensor.water_meter_reading": rows };
-    if (id === "sensor.rainfall_cumulative") return { "sensor.rainfall_cumulative": rainRows };
   }
-  if (m.type === "history/history_during_period") return floodRows;
+  if (m.type === "history/history_during_period") {
+    if ((m.entity_ids || []).includes("sensor.rainfall_cumulative")) return { "sensor.rainfall_cumulative": rainRows };
+    return floodRows;
+  }
   return {};
 };
 const S = (v, extra) => ({ state: String(v), attributes: extra || {} });
@@ -77,9 +79,22 @@ check("setConfig rejects missing meter_entity", (() => { try { new Card().setCon
   const el = await make(st); const h = el.shadowRoot.innerHTML;
   check("watered today: irrigation credit row paid", /Irrigation[\s\S]*?the drip, \d{1,2}:\d{2} [AP]M[\s\S]*?class="a cr">paid</.test(h)); }
 
-{ rainRows = [{ change: 0.05 }, { change: 0.07 }, { change: 0 }];
+{ rainRows = [{ s: "0.35", lu: 1 }, { s: "0.40", lu: 2 }, { s: "0.47", lu: 3 }];
   const el = await make(base()); const h = el.shadowRoot.innerHTML;
-  check("rain 24h summed 0.12 green", /class="a cr">0\.12</.test(h));
+  check("rain 24h from history: now vs a day ago = 0.12 green", /class="a cr">0\.12</.test(h));
+  // the gauge ticks → the credit refreshes at once, without waiting for the 30-minute stats cycle
+  rainRows = [{ s: "0.35", lu: 1 }, { s: "0.40", lu: 2 }, { s: "0.47", lu: 3 }, { s: "0.49", lu: 4 }];
+  const st = base(); st["sensor.rainfall_cumulative"] = S(0.49); el.hass = { states: st, callWS: stats }; await tick(); await tick();
+  const h2 = el.shadowRoot.innerHTML;
+  check("gauge tick refetches: 0.14 green, season 0.49", /class="a cr">0\.14</.test(h2) && h2.includes("SEASON RAIN</b> 0.49 in"));
+  // a meter reset inside the window: only the positive steps count
+  rainRows = [{ s: "0.47", lu: 1 }, { s: "0", lu: 2 }, { s: "0.02", lu: 3 }];
+  const st2 = base(); st2["sensor.rainfall_cumulative"] = S(0.02); const el3 = await make(st2); const h3 = el3.shadowRoot.innerHTML;
+  check("gauge reset in window: 0.02 credited, not negative", /class="a cr">0\.02</.test(h3) && !h3.includes("-0."));
+  // no rain: the credit row prints 0.00 with no green
+  rainRows = [{ s: "0.47", lu: 1 }];
+  const el4 = await make(base()); const h4 = el4.shadowRoot.innerHTML;
+  check("dry day: 0.00, not credited", /class="a">0\.00</.test(h4));
   rainRows = []; }
 
 { const st = base(); st["binary_sensor.kitchen_kitchen_sink_leak_flood"] = S("on");

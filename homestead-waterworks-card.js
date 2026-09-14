@@ -5,7 +5,7 @@
  * box and the dry-streak), and the mains demoted to a one-line agate brief. Read-only: tap →
  * more-info. Companion to almanac-weather-card / network-ledger-card / homestead-classifieds-card
  * / homestead-pool-card / homestead-motoring-card. */
-const HWC_VERSION = "2026.9.5";
+const HWC_VERSION = "2026.9.6";
 const INK = "#3a2d1f", PAPER = "#f3e7d3", TAN = "#a3876a", BROWN = "#7a6248",
   TERRA = "#c65f38", BLUE = "#5f7e94", DOT = "#cfb894", GREEN = "#2f7f6f", RED = "#7e1d10";
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -54,6 +54,10 @@ class HomesteadWaterworksCard extends HTMLElement {
     const wk = ((this._cfg && this._cfg.correspondents) || []).map((p) => { const s = this._st(p.entity); return s && s.state === "on" ? "1" : "0"; }).join("");
     if (this._wetKey !== undefined && wk !== this._wetKey) this._statsAt = 0;
     this._wetKey = wk;
+    // the gauge ticking is news — refresh the 24-hour rain credit the moment it does
+    const rk = this._cfg && this._cfg.rain_gauge_entity ? (this._st(this._cfg.rain_gauge_entity) || {}).state : undefined;
+    if (this._rainKey !== undefined && rk !== this._rainKey) this._fetchRain();
+    this._rainKey = rk;
     this._maybeFetchStats(); this._render();
   }
   getCardSize() { return 8; }
@@ -72,13 +76,7 @@ class HomesteadWaterworksCard extends HTMLElement {
       const r = await this._hass.callWS({ type: "recorder/statistics_during_period", start_time: start.toISOString(), statistic_ids: [this._cfg.meter_entity], period: "day", types: ["change"] });
       const rows = (r && r[this._cfg.meter_entity]) || [];
       this._stats = rows.map((x) => ({ day: ymd(new Date(x.start)), gal: x.change == null ? null : Math.max(0, x.change) })).filter((x) => x.gal != null);
-      if (this._cfg.rain_gauge_entity) {
-        try {
-          const r24 = await this._hass.callWS({ type: "recorder/statistics_during_period", start_time: new Date(Date.now() - 24 * 3600000).toISOString(), statistic_ids: [this._cfg.rain_gauge_entity], period: "hour", types: ["change"] });
-          const rr = (r24 && r24[this._cfg.rain_gauge_entity]) || [];
-          this._rain24 = rr.reduce((a, x) => a + (x.change > 0 ? x.change : 0), 0);
-        } catch (e) { /* keep the last figure */ }
-      }
+      await this._fetchRain();
       const ents = [...(this._cfg.correspondents || []).map((p) => p.entity), this._cfg.leak_entity].filter(Boolean);
       if (ents.length) {
         try {
@@ -97,6 +95,23 @@ class HomesteadWaterworksCard extends HTMLElement {
       this._statsAt = Date.now(); this._statsDay = day; this._sig = null; this._render();
     } catch (e) { /* keep the last rows */ }
     finally { this._fetching = false; }
+  }
+  // Rain in the last 24 hours: the gauge's reading now against its reading a day ago, read from
+  // history rather than compiled statistics so a shower prints as soon as the gauge ticks.
+  // Summing only the positive steps keeps a meter reset inside the window from going negative.
+  async _fetchRain() {
+    const id = this._cfg && this._cfg.rain_gauge_entity;
+    if (!id || !this._hass || this._rainFetching) return;
+    this._rainFetching = true;
+    try {
+      const r = await this._hass.callWS({ type: "history/history_during_period", start_time: new Date(Date.now() - 24 * 3600000).toISOString(), entity_ids: [id], minimal_response: true, no_attributes: true });
+      const pts = ((r && r[id]) || []).map((x) => num(x.s)).filter((v) => v != null);
+      const live = this._val(id); if (live != null) pts.push(live);
+      let sum = 0; for (let i = 1; i < pts.length; i++) { const d = pts[i] - pts[i - 1]; if (d > 0) sum += d; }
+      this._rain24 = pts.length ? sum : null;
+      this._sig = null; this._render();
+    } catch (e) { /* keep the last figure */ }
+    finally { this._rainFetching = false; }
   }
   _series() {
     const today = ymd(new Date());
